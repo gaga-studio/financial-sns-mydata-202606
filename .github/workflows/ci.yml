@@ -1,0 +1,76 @@
+name: Dataset CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile generator
+        run: python -m py_compile work/generate_financial_sns_dataset.py
+
+      - name: Validate dataset files
+        run: |
+          python - <<'PY'
+          import csv
+          import json
+          from pathlib import Path
+
+          root = Path("outputs/financial_sns_mydata_202606")
+          required = [
+              root / "README.md",
+              root / "aggregates" / "personas.jsonl",
+              root / "aggregates" / "ledger_all.csv",
+              root / "aggregates" / "feature_matrix.csv",
+              root / "aggregates" / "social_edges.csv",
+              root / "aggregates" / "social_feed.csv",
+              root / "validation" / "validation_report.json",
+          ]
+
+          missing = [str(path) for path in required if not path.exists()]
+          if missing:
+              raise SystemExit("Missing required dataset files: " + ", ".join(missing))
+
+          bundles = sorted((root / "bundles").glob("P*"))
+          if len(bundles) != 199:
+              raise SystemExit(f"Expected 199 persona bundles, found {len(bundles)}")
+
+          report = json.loads((root / "validation" / "validation_report.json").read_text(encoding="utf-8"))
+          if report.get("status") != "PASS":
+              raise SystemExit(f"Dataset validation status is {report.get('status')!r}, expected 'PASS'")
+          if report.get("error_count") not in (0, "0", None):
+              raise SystemExit(f"Dataset validation error_count is {report.get('error_count')!r}")
+
+          for csv_path in [
+              root / "aggregates" / "ledger_all.csv",
+              root / "aggregates" / "feature_matrix.csv",
+              root / "aggregates" / "social_edges.csv",
+              root / "aggregates" / "social_feed.csv",
+          ]:
+              with csv_path.open(newline="", encoding="utf-8") as handle:
+                  reader = csv.reader(handle)
+                  header = next(reader, None)
+                  row = next(reader, None)
+              if not header or not row:
+                  raise SystemExit(f"{csv_path} must include a header and at least one data row")
+
+          print("Dataset structure looks good.")
+          PY
